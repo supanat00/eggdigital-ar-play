@@ -1,9 +1,9 @@
 // src/components/liff/LiffInitializerAndLogger.tsx
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react'; // <<< เพิ่ม useCallback และ useRef
+import { useEffect, useState, useCallback, useRef } from 'react'; // Import hooks needed
 import { useUser } from '@/contexts/UserContext';
-import type { Liff } from '@line/liff';
+// import type { Liff } from '@line/liff';
 import type { Profile } from '@liff/get-profile';
 
 // --- Constants for Popup ---
@@ -12,17 +12,16 @@ const TRANSITION_DURATION_MS = 300; // CSS transition duration (ms) - for fade e
 
 export default function LiffInitializerAndLogger() {
     const liffId = process.env.NEXT_PUBLIC_LIFF_ID || "";
-    const { setUser } = useUser(); // setUser is stable from context usually
+    const { setUser } = useUser();
 
     // --- State for Popup UI ---
     const [popupMessage, setPopupMessage] = useState<string | null>(null);
     const [popupType, setPopupType] = useState<'success' | 'info' | 'error'>('info');
-    const [isPopupVisible, setIsPopupVisible] = useState<boolean>(false); // Controls opacity and pointer-events
+    // --- vvv State controls opacity and pointer-events vvv ---
+    const [isPopupVisible, setIsPopupVisible] = useState<boolean>(false);
+    const hideTimerRef = useRef<NodeJS.Timeout | null>(null); // Use Ref for timer
 
-    // --- vvv Use useRef for the timer ID vvv ---
-    const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-    // --- Function to trigger showing the popup (made stable with useCallback) ---
+    // --- Function to trigger showing the popup (stable with useCallback) ---
     const triggerPopup = useCallback((message: string, type: 'success' | 'info' | 'error') => {
         // Clear previous timer using Ref
         if (hideTimerRef.current) {
@@ -33,18 +32,19 @@ export default function LiffInitializerAndLogger() {
         setPopupType(type);
         setIsPopupVisible(true); // Make it visible (starts fade-in)
 
-        // Set a new timer and store ID in Ref
+        // Set a new timer to hide the popup
         hideTimerRef.current = setTimeout(() => {
             setIsPopupVisible(false); // Start fade-out
             hideTimerRef.current = null; // Clear ref after timer fires
-            // Optional: Clear message after fade out completes
+            // Optional: Clear message after fade out completes for state cleanup
             // setTimeout(() => setPopupMessage(null), TRANSITION_DURATION_MS);
         }, POPUP_DURATION);
-    }, []); // <<< Empty dependency array: This function's identity is stable
+    }, []); // Empty dependency array makes this function stable
 
     // --- useEffect for LIFF Initialization ---
     useEffect(() => {
-        // Don't need to reset popup visibility here, triggerPopup handles it
+        // Ensure popup starts hidden if effect re-runs
+        // setIsPopupVisible(false); // Can cause flicker if uncommented
 
         if (!liffId) {
             console.error('[LIFF POPUP] LIFF ID is missing.');
@@ -68,19 +68,29 @@ export default function LiffInitializerAndLogger() {
                             liffInstance.getProfile()
                                 .then((profile: Profile) => {
                                     if (isMounted) {
-                                        console.log(/* ... log profile ... */);
-                                        // Use the stable setUser from context
+                                        // Log profile data
+                                        console.log('-------------------------------------------');
+                                        console.log('[LIFF POPUP] Fetched User Profile:');
+                                        console.log(`  User ID: ${profile.userId}`);
+                                        console.log(`  Display Name: ${profile.displayName}`);
+                                        if (profile.pictureUrl) console.log(`  Picture URL: ${profile.pictureUrl}`);
+                                        if (profile.statusMessage) console.log(`  Status Message: ${profile.statusMessage}`);
+                                        console.log('  Raw Profile Object:', profile);
+                                        console.log('-------------------------------------------');
+
+                                        // Set user data
                                         setUser({
                                             displayName: profile.displayName,
                                             userId: profile.userId,
                                         });
                                         console.log('[LIFF POPUP] User context updated.');
-                                        // Use the stable triggerPopup
+
+                                        // Trigger Success Popup
                                         triggerPopup(`เชื่อมต่อสำเร็จ: ${profile.displayName}`, "success");
                                     }
                                 })
-                                .catch(error => {
-                                    console.error('[LIFF POPUP] Error fetching profile:', /*...*/);
+                                .catch(_error => {
+                                    console.error('[LIFF POPUP] Error fetching LIFF profile:', _error instanceof Error ? _error.message : _error);
                                     if (isMounted) triggerPopup("ผิดพลาด: ดึงข้อมูลโปรไฟล์ไม่ได้", "error");
                                 });
                         } else {
@@ -88,13 +98,13 @@ export default function LiffInitializerAndLogger() {
                             if (isMounted) triggerPopup("ไม่ได้เชื่อมต่อกับ LINE", "info");
                         }
                     })
-                    .catch(error => {
-                        console.error('[LIFF POPUP] LIFF initialization error:', /*...*/);
+                    .catch(_error => {
+                        console.error('[LIFF POPUP] LIFF initialization error:', _error instanceof Error ? _error.message : _error);
                         if (isMounted) triggerPopup("ผิดพลาด: ไม่สามารถเริ่ม LIFF ได้", "error");
                     });
             })
-            .catch(error => {
-                console.error('[LIFF POPUP] Failed to load LIFF SDK module:', /*...*/);
+            .catch(_error => {
+                console.error('[LIFF POPUP] Failed to load LIFF SDK module:', _error instanceof Error ? _error.message : _error);
                 if (isMounted) triggerPopup("ผิดพลาด: โหลด LIFF SDK ไม่สำเร็จ", "error");
             });
 
@@ -108,7 +118,7 @@ export default function LiffInitializerAndLogger() {
             }
             console.log('[LIFF POPUP] Component cleanup.');
         };
-        // --- vvv Dependency Array: triggerPopup is stable, setUser should be stable vvv ---
+        // Dependencies: Stable triggerPopup, stable setUser, and liffId
     }, [liffId, setUser, triggerPopup]);
 
     // --- Styling for the Popup ---
@@ -121,24 +131,31 @@ export default function LiffInitializerAndLogger() {
         }
     };
 
+    // --- vvv CSS Classes for Fade In/Out vvv ---
     const popupClasses = `
-        fixed top-5 left-1/2 transform -translate-x-1/2 /* Position */
-        w-11/12 sm:w-auto max-w-md /* Width */
-        px-4 py-3 rounded-md shadow-xl /* Appearance */
-        text-white text-center text-sm font-semibold /* Text */
-        transition-opacity ease-in-out /* Apply transition to opacity */
-        duration-${TRANSITION_DURATION_MS} /* Match JS constant */
+        fixed top-5 left-1/2 transform -translate-x-1/2 /* Position: Centered top */
+        w-11/12 sm:w-auto max-w-md /* Width: Responsive */
+        mt-0 /* Reset margin-top if using top-5 */
+        px-4 py-3 rounded-md shadow-xl /* Appearance: padding, rounded corners, shadow */
+        text-white text-center text-sm font-semibold /* Text styling */
+        transition-opacity ease-in-out /* Apply transition ONLY to opacity */
+        duration-${TRANSITION_DURATION_MS} /* Match JS constant for transition speed */
         z-[100] /* Ensure it's on top */
-        ${getBackgroundColor()} /* Dynamic background */
+        ${getBackgroundColor()} /* Dynamic background color */
         ${isPopupVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'} /* Control visibility and click-through */
     `;
-    // ---------------------------------------------------
+    // ------------------------------------------
 
     // --- Render the Popup UI ---
+    // Render the div always for the transition effect to work smoothly
     return (
         <div className={popupClasses} role="alert" aria-live="assertive">
-            {/* Render message only when it's supposed to be visible */}
-            {isPopupVisible ? popupMessage : ''}
+            {/* Render message content */}
+            {popupMessage}
+            {/* It's often better to just render the message directly,
+                the opacity transition handles the visual appearance/disappearance.
+                Rendering conditionally based on isPopupVisible can sometimes cause text flicker during fade-out.
+            */}
         </div>
     );
 }
