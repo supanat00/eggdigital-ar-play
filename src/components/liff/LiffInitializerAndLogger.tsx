@@ -1,25 +1,59 @@
 // src/components/liff/LiffInitializerAndLogger.tsx
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react'; // <<< เพิ่ม useCallback และ useRef
 import { useUser } from '@/contexts/UserContext';
-// import type { Liff } from '@line/liff';
+import type { Liff } from '@line/liff';
 import type { Profile } from '@liff/get-profile';
 
-const LOGIN_ATTEMPTED_KEY = 'liffLoginAttempted'; // Key for sessionStorage
+// --- Constants for Popup ---
+const POPUP_DURATION = 3000; // How long the popup stays visible (ms)
+const TRANSITION_DURATION_MS = 300; // CSS transition duration (ms) - for fade effect
 
 export default function LiffInitializerAndLogger() {
     const liffId = process.env.NEXT_PUBLIC_LIFF_ID || "";
-    const { setUser } = useUser();
+    const { setUser } = useUser(); // setUser is stable from context usually
 
+    // --- State for Popup UI ---
+    const [popupMessage, setPopupMessage] = useState<string | null>(null);
+    const [popupType, setPopupType] = useState<'success' | 'info' | 'error'>('info');
+    const [isPopupVisible, setIsPopupVisible] = useState<boolean>(false); // Controls opacity and pointer-events
+
+    // --- vvv Use useRef for the timer ID vvv ---
+    const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // --- Function to trigger showing the popup (made stable with useCallback) ---
+    const triggerPopup = useCallback((message: string, type: 'success' | 'info' | 'error') => {
+        // Clear previous timer using Ref
+        if (hideTimerRef.current) {
+            clearTimeout(hideTimerRef.current);
+        }
+
+        setPopupMessage(message); // Set message content
+        setPopupType(type);
+        setIsPopupVisible(true); // Make it visible (starts fade-in)
+
+        // Set a new timer and store ID in Ref
+        hideTimerRef.current = setTimeout(() => {
+            setIsPopupVisible(false); // Start fade-out
+            hideTimerRef.current = null; // Clear ref after timer fires
+            // Optional: Clear message after fade out completes
+            // setTimeout(() => setPopupMessage(null), TRANSITION_DURATION_MS);
+        }, POPUP_DURATION);
+    }, []); // <<< Empty dependency array: This function's identity is stable
+
+    // --- useEffect for LIFF Initialization ---
     useEffect(() => {
+        // Don't need to reset popup visibility here, triggerPopup handles it
+
         if (!liffId) {
-            console.error('[LIFF INIT&LOG] LIFF ID (NEXT_PUBLIC_LIFF_ID) is missing.');
+            console.error('[LIFF POPUP] LIFF ID is missing.');
+            triggerPopup("ข้อผิดพลาด: ไม่พบ LIFF ID", "error");
             return;
         }
 
         let isMounted = true;
-        console.log(`[LIFF INIT&LOG] Initializing LIFF with ID: ${liffId}`);
+        console.log(`[LIFF POPUP] Initializing LIFF with ID: ${liffId}`);
 
         import('@line/liff')
             .then(liffModule => {
@@ -27,83 +61,84 @@ export default function LiffInitializerAndLogger() {
                 liffInstance.init({ liffId })
                     .then(() => {
                         if (!isMounted) return;
-                        console.log('[LIFF INIT&LOG] LIFF initialization successful.');
+                        console.log('[LIFF POPUP] LIFF initialization successful.');
 
                         if (liffInstance.isLoggedIn()) {
-                            // --- User is Logged In ---
-                            console.log('[LIFF INIT&LOG] User is logged in via LIFF. Fetching profile...');
-                            // Clear the flag if login is successful now
-                            sessionStorage.removeItem(LOGIN_ATTEMPTED_KEY);
-
+                            console.log('[LIFF POPUP] User is logged in. Fetching profile...');
                             liffInstance.getProfile()
                                 .then((profile: Profile) => {
                                     if (isMounted) {
-                                        // --- vvv Log Profile Data (เหมือนเดิม) vvv ---
-                                        console.log('-------------------------------------------');
-                                        console.log('[LIFF INIT&LOG] Fetched User Profile:');
-                                        console.log(`  User ID: ${profile.userId}`);
-                                        console.log(`  Display Name: ${profile.displayName}`);
-                                        if (profile.pictureUrl) console.log(`  Picture URL: ${profile.pictureUrl}`);
-                                        if (profile.statusMessage) console.log(`  Status Message: ${profile.statusMessage}`);
-                                        // Log the whole profile object as well for debugging
-                                        console.log('  Raw Profile Object:', profile);
-                                        console.log('-------------------------------------------');
-                                        // ------------------------------------------------
-
-                                        // Set user data in the global context
+                                        console.log(/* ... log profile ... */);
+                                        // Use the stable setUser from context
                                         setUser({
                                             displayName: profile.displayName,
                                             userId: profile.userId,
                                         });
-                                        console.log('[LIFF INIT&LOG] User context updated.');
+                                        console.log('[LIFF POPUP] User context updated.');
+                                        // Use the stable triggerPopup
+                                        triggerPopup(`เชื่อมต่อสำเร็จ: ${profile.displayName}`, "success");
                                     }
                                 })
                                 .catch(error => {
-                                    console.error('[LIFF INIT&LOG] Error fetching LIFF profile:', error instanceof Error ? error.message : error);
-                                })
-                                .finally(() => {
-                                    console.log('[LIFF INIT&LOG] Initialization complete (Logged In - Profile fetch attempt finished).');
+                                    console.error('[LIFF POPUP] Error fetching profile:', /*...*/);
+                                    if (isMounted) triggerPopup("ผิดพลาด: ดึงข้อมูลโปรไฟล์ไม่ได้", "error");
                                 });
                         } else {
-                            // --- User is NOT Logged In ---
-                            const loginAttempted = sessionStorage.getItem(LOGIN_ATTEMPTED_KEY);
-
-                            if (loginAttempted) {
-                                // Already tried to login and came back without logging in
-                                console.log('-------------------------------------------');
-                                console.log('[LIFF INIT&LOG] ไม่มีการเชื่อมต่อข้อมูล user (User is not logged in, login attempt previously failed or was cancelled)');
-                                console.log('-------------------------------------------');
-                            } else {
-                                // First time encountering not logged in state, attempt login redirect
-                                console.log('[LIFF INIT&LOG] User is not logged in. Attempting redirect to LINE Login...');
-                                // Set the flag *before* redirecting
-                                sessionStorage.setItem(LOGIN_ATTEMPTED_KEY, 'true');
-                                // Redirect to LINE Login page
-                                liffInstance.login({
-                                    // Optional: Specify where to redirect back after login/cancel
-                                    // redirectUri: window.location.href
-                                });
-                                // Note: Script execution likely stops here due to redirect.
-                                // The component will re-run when the user returns.
-                                return; // Explicitly return to make it clear execution stops
-                            }
+                            console.log('[LIFF POPUP] ไม่มีการเชื่อมต่อข้อมูล user (Not logged in)');
+                            if (isMounted) triggerPopup("ไม่ได้เชื่อมต่อกับ LINE", "info");
                         }
                     })
                     .catch(error => {
-                        console.error('[LIFF INIT&LOG] LIFF initialization error:', error instanceof Error ? error.message : error);
+                        console.error('[LIFF POPUP] LIFF initialization error:', /*...*/);
+                        if (isMounted) triggerPopup("ผิดพลาด: ไม่สามารถเริ่ม LIFF ได้", "error");
                     });
             })
             .catch(error => {
-                console.error('[LIFF INIT&LOG] Failed to load LIFF SDK module:', error instanceof Error ? error.message : error);
+                console.error('[LIFF POPUP] Failed to load LIFF SDK module:', /*...*/);
+                if (isMounted) triggerPopup("ผิดพลาด: โหลด LIFF SDK ไม่สำเร็จ", "error");
             });
 
-        // Cleanup function
+        // --- Cleanup Function ---
         return () => {
             isMounted = false;
-            console.log('[LIFF INIT&LOG] Component cleanup.');
+            // Clear timer using Ref on unmount/re-run
+            if (hideTimerRef.current) {
+                clearTimeout(hideTimerRef.current);
+                hideTimerRef.current = null; // Reset ref
+            }
+            console.log('[LIFF POPUP] Component cleanup.');
         };
-    }, [liffId, setUser]);
+        // --- vvv Dependency Array: triggerPopup is stable, setUser should be stable vvv ---
+    }, [liffId, setUser, triggerPopup]);
 
-    // This component renders nothing to the UI.
-    return null;
+    // --- Styling for the Popup ---
+    const getBackgroundColor = () => {
+        switch (popupType) {
+            case 'success': return 'bg-green-500';
+            case 'info': return 'bg-blue-500';
+            case 'error': return 'bg-red-600';
+            default: return 'bg-gray-700';
+        }
+    };
+
+    const popupClasses = `
+        fixed top-5 left-1/2 transform -translate-x-1/2 /* Position */
+        w-11/12 sm:w-auto max-w-md /* Width */
+        px-4 py-3 rounded-md shadow-xl /* Appearance */
+        text-white text-center text-sm font-semibold /* Text */
+        transition-opacity ease-in-out /* Apply transition to opacity */
+        duration-${TRANSITION_DURATION_MS} /* Match JS constant */
+        z-[100] /* Ensure it's on top */
+        ${getBackgroundColor()} /* Dynamic background */
+        ${isPopupVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'} /* Control visibility and click-through */
+    `;
+    // ---------------------------------------------------
+
+    // --- Render the Popup UI ---
+    return (
+        <div className={popupClasses} role="alert" aria-live="assertive">
+            {/* Render message only when it's supposed to be visible */}
+            {isPopupVisible ? popupMessage : ''}
+        </div>
+    );
 }
